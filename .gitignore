@@ -60,3 +60,6 @@ backend/coverage/
 android/key.properties
 *.jks
 *.keystore
+
+# Local backup files
+*.bak
