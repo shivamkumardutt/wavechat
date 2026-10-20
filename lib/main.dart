@@ -1,4 +1,5 @@
 import 'auth/auth_gate.dart';
+
 import 'package:flutter/material.dart';
 
 import 'services/api_service.dart';
@@ -30,7 +31,6 @@ class WaveChatApp extends StatelessWidget {
       ),
 
       home: const AuthGate(),
-
     );
   }
 }
@@ -59,12 +59,8 @@ class Chat {
   final bool verified;
 }
 
-
 class WaveHomePage extends StatefulWidget {
-  const WaveHomePage({
-    super.key,
-    required this.onLogout,
-  });
+  const WaveHomePage({super.key, required this.onLogout});
 
   final Future<void> Function() onLogout;
 
@@ -102,7 +98,7 @@ class _WaveHomePageState extends State<WaveHomePage> {
     ),
     Chat(
       name: 'Rahul Verma',
-      message: 'Thanks bhai 🙌',
+      message: 'Thanks bhai ðŸ™Œ',
       time: 'Yesterday',
       color: Color(0xFF478F82),
     ),
@@ -201,13 +197,11 @@ class _WaveHomePageState extends State<WaveHomePage> {
                   content: const Text('Are you sure you want to logout?'),
                   actions: [
                     TextButton(
-                      onPressed: () =>
-                          Navigator.pop(dialogContext, false),
+                      onPressed: () => Navigator.pop(dialogContext, false),
                       child: const Text('Cancel'),
                     ),
                     FilledButton(
-                      onPressed: () =>
-                          Navigator.pop(dialogContext, true),
+                      onPressed: () => Navigator.pop(dialogContext, true),
                       child: const Text('Logout'),
                     ),
                   ],
@@ -514,47 +508,134 @@ class _WaveHomePageState extends State<WaveHomePage> {
 
   void showNewChatDialog(BuildContext context) {
     final controller = TextEditingController();
+    final api = ApiService();
+
+    bool creating = false;
+    String? dialogError;
 
     showDialog<void>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('New conversation'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(
-            labelText: 'Contact name',
-            hintText: 'Enter a name',
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('New conversation'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Enter the email address of a registered WaveChat user.',
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: controller,
+                autofocus: true,
+                keyboardType: TextInputType.emailAddress,
+                enabled: !creating,
+                decoration: const InputDecoration(
+                  labelText: 'User email',
+                  hintText: 'friend@example.com',
+                  prefixIcon: Icon(Icons.email_outlined),
+                ),
+                onSubmitted: (_) {},
+              ),
+              if (dialogError != null) ...[
+                const SizedBox(height: 10),
+                Text(dialogError!, style: const TextStyle(color: Colors.red)),
+              ],
+            ],
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final name = controller.text.trim();
-              if (name.isEmpty) return;
+          actions: [
+            TextButton(
+              onPressed: creating ? null : () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: creating
+                  ? null
+                  : () async {
+                      final email = controller.text.trim().toLowerCase();
 
-              setState(() {
-                chats.insert(
-                  0,
-                  Chat(
-                    name: name,
-                    message: 'Start a conversation',
-                    time: 'Now',
-                    color: const Color(0xFF478F82),
-                  ),
-                );
-                selectedTab = 0;
-                search = '';
-              });
-              Navigator.pop(dialogContext);
-            },
-            child: const Text('Create'),
-          ),
-        ],
+                      if (email.isEmpty || !email.contains('@')) {
+                        setDialogState(() {
+                          dialogError = 'Enter a valid email address.';
+                        });
+                        return;
+                      }
+
+                      setDialogState(() {
+                        creating = true;
+                        dialogError = null;
+                      });
+
+                      try {
+                        final result = await api.createConversation(
+                          email: email,
+                        );
+
+                        final conversation =
+                            result['conversation'] as Map<String, dynamic>;
+                        final otherUser =
+                            result['otherUser'] as Map<String, dynamic>;
+
+                        final conversationId =
+                            conversation['conversationId'] as String;
+                        final name =
+                            (otherUser['name'] as String?)?.trim().isNotEmpty ==
+                                true
+                            ? (otherUser['name'] as String).trim()
+                            : email;
+
+                        if (!mounted) return;
+
+                        final existingIndex = chats.indexWhere(
+                          (chat) => chat.conversationId == conversationId,
+                        );
+
+                        if (existingIndex == -1) {
+                          setState(() {
+                            chats.insert(
+                              0,
+                              Chat(
+                                name: name,
+                                message: 'Start a conversation',
+                                time: 'Now',
+                                color: const Color(0xFF478F82),
+                                conversationId: conversationId,
+                              ),
+                            );
+                            selectedTab = 0;
+                            search = '';
+                          });
+                        } else {
+                          setState(() {
+                            selectedTab = 0;
+                            search = '';
+                          });
+                        }
+
+                        if (!dialogContext.mounted) return;
+
+                        Navigator.pop(dialogContext);
+                      } catch (e) {
+                        setDialogState(() {
+                          dialogError = e.toString().replaceFirst(
+                            'Exception: ',
+                            '',
+                          );
+                          creating = false;
+                        });
+                      }
+                    },
+              child: creating
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Create'),
+            ),
+          ],
+        ),
       ),
     ).then((_) => controller.dispose());
   }
@@ -577,8 +658,8 @@ class _ChatPageState extends State<ChatPage> {
   bool loading = true;
   bool sending = false;
   String? error;
-String? pendingClientMessageId;
-String? pendingMessageText;
+  String? pendingClientMessageId;
+  String? pendingMessageText;
 
   @override
   void initState() {
@@ -619,67 +700,63 @@ String? pendingMessageText;
     }
   }
 
+  Future<void> sendMessage() async {
+    final text = controller.text.trim();
+    if (text.isEmpty || sending) return;
 
-Future<void> sendMessage() async {
-  final text = controller.text.trim();
-  if (text.isEmpty || sending) return;
+    final String clientMessageId;
 
-  final String clientMessageId;
+    if (pendingClientMessageId != null && pendingMessageText == text) {
+      // Retry: reuse the same ID for the same message.
+      clientMessageId = pendingClientMessageId!;
+    } else {
+      // New or edited message: generate a fresh ID.
+      clientMessageId = '${DateTime.now().microsecondsSinceEpoch}-shivam';
 
-  if (pendingClientMessageId != null &&
-      pendingMessageText == text) {
-    // Retry: reuse the same ID for the same message.
-    clientMessageId = pendingClientMessageId!;
-  } else {
-    // New or edited message: generate a fresh ID.
-    clientMessageId =
-        '${DateTime.now().microsecondsSinceEpoch}-shivam';
-
-    pendingClientMessageId = clientMessageId;
-    pendingMessageText = text;
-  }
-
-  setState(() {
-    sending = true;
-    error = null;
-  });
-
-  try {
-    final message = await api.sendMessage(
-      conversationId: widget.chat.conversationId,
-      clientMessageId: clientMessageId,
-      text: text,
-      senderId: 'shivam',
-    );
-
-    if (!mounted) return;
+      pendingClientMessageId = clientMessageId;
+      pendingMessageText = text;
+    }
 
     setState(() {
-      final messageId = message['id'];
-
-      if (!messages.any((item) => item['id'] == messageId)) {
-        messages.add(message);
-      }
-
-      widget.chat.message = text;
-      widget.chat.time = 'Now';
-      controller.clear();
-
-      pendingClientMessageId = null;
-      pendingMessageText = null;
-
-      sending = false;
+      sending = true;
+      error = null;
     });
-  } catch (_) {
-    if (!mounted) return;
 
-    setState(() {
-      sending = false;
-      error = 'Message send nahi hua. Connection check karo aur retry karo.';
-    });
+    try {
+      final message = await api.sendMessage(
+        conversationId: widget.chat.conversationId,
+        clientMessageId: clientMessageId,
+        text: text,
+        senderId: 'shivam',
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        final messageId = message['id'];
+
+        if (!messages.any((item) => item['id'] == messageId)) {
+          messages.add(message);
+        }
+
+        widget.chat.message = text;
+        widget.chat.time = 'Now';
+        controller.clear();
+
+        pendingClientMessageId = null;
+        pendingMessageText = null;
+
+        sending = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+
+      setState(() {
+        sending = false;
+        error = 'Message send nahi hua. Connection check karo aur retry karo.';
+      });
+    }
   }
-}
-
 
   @override
   Widget build(BuildContext context) {
@@ -696,19 +773,18 @@ Future<void> sendMessage() async {
       ),
       body: Column(
         children: [
-
-if (error != null)
-  MaterialBanner(
-    content: Text(error!),
-    actions: [
-      TextButton(
-        onPressed: pendingClientMessageId != null
-            ? sendMessage
-            : loadMessages,
-        child: const Text('Retry'),
-      ),
-    ],
-  ),
+          if (error != null)
+            MaterialBanner(
+              content: Text(error!),
+              actions: [
+                TextButton(
+                  onPressed: pendingClientMessageId != null
+                      ? sendMessage
+                      : loadMessages,
+                  child: const Text('Retry'),
+                ),
+              ],
+            ),
 
           Expanded(
             child: loading

@@ -17,6 +17,7 @@ class ApiService {
   static const String _userIdKey = 'wavechat_user_id';
   static const String _userNameKey = 'wavechat_user_name';
 
+  // Register a new user.
   Future<Map<String, dynamic>> register({
     required String name,
     required String email,
@@ -27,8 +28,8 @@ class ApiService {
           Uri.parse('$baseUrl/auth/register'),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({
-            'name': name,
-            'email': email,
+            'name': name.trim(),
+            'email': email.trim().toLowerCase(),
             'password': password,
           }),
         )
@@ -42,6 +43,7 @@ class ApiService {
     return Map<String, dynamic>.from(data['user'] as Map);
   }
 
+  // Login and securely store the JWT.
   Future<Map<String, dynamic>> login({
     required String email,
     required String password,
@@ -51,7 +53,7 @@ class ApiService {
           Uri.parse('$baseUrl/auth/login'),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({
-            'email': email,
+            'email': email.trim().toLowerCase(),
             'password': password,
           }),
         )
@@ -67,12 +69,18 @@ class ApiService {
     final userId = user['id'] as String?;
     final userName = user['name'] as String?;
 
-    if (token == null || token.isEmpty || userId == null || userId.isEmpty) {
-      throw Exception('Login response is missing token or user information.');
+    if (token == null ||
+        token.isEmpty ||
+        userId == null ||
+        userId.isEmpty) {
+      throw Exception(
+        'Login response is missing token or user information.',
+      );
     }
 
     await _storage.write(key: _tokenKey, value: token);
     await _storage.write(key: _userIdKey, value: userId);
+
     if (userName != null) {
       await _storage.write(key: _userNameKey, value: userName);
     }
@@ -91,6 +99,44 @@ class ApiService {
   Future<bool> isLoggedIn() async {
     final token = await _storage.read(key: _tokenKey);
     return token != null && token.isNotEmpty;
+  }
+
+  // Create or retrieve a conversation with a registered user by email.
+  // The backend must implement POST /api/v1/conversations.
+  Future<Map<String, dynamic>> createConversation({
+    required String email,
+  }) async {
+    final normalizedEmail = email.trim().toLowerCase();
+
+    if (normalizedEmail.isEmpty) {
+      throw Exception('Email is required to start a conversation.');
+    }
+
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/conversations'),
+          headers: await _authHeaders(jsonContent: true),
+          body: jsonEncode({'email': normalizedEmail}),
+        )
+        .timeout(const Duration(seconds: 10));
+
+    if (response.statusCode != 200) {
+      throw Exception(
+        _errorMessage(response, 'Failed to create conversation'),
+      );
+    }
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+
+    if (data['conversation'] is! Map || data['otherUser'] is! Map) {
+      throw Exception('Invalid conversation response from server.');
+    }
+
+    return {
+      'conversation':
+          Map<String, dynamic>.from(data['conversation'] as Map),
+      'otherUser': Map<String, dynamic>.from(data['otherUser'] as Map),
+    };
   }
 
   Future<void> logout() async {
@@ -114,11 +160,18 @@ class ApiService {
     };
   }
 
+  // Fetch messages for an authorized conversation.
   Future<List<Map<String, dynamic>>> fetchMessages({
     required String conversationId,
   }) async {
+    final normalizedId = conversationId.trim();
+
+    if (normalizedId.isEmpty) {
+      throw Exception('Conversation ID is required.');
+    }
+
     final uri = Uri.parse('$baseUrl/messages').replace(
-      queryParameters: {'conversationId': conversationId},
+      queryParameters: {'conversationId': normalizedId},
     );
 
     final response = await http
@@ -130,27 +183,48 @@ class ApiService {
     }
 
     final data = jsonDecode(response.body) as Map<String, dynamic>;
-    final items = data['messages'] as List<dynamic>;
+    final items = data['messages'];
+
+    if (items is! List) {
+      throw Exception('Invalid messages response from server.');
+    }
 
     return items
         .map((item) => Map<String, dynamic>.from(item as Map))
         .toList();
   }
 
+  // Send a message. The backend derives senderId from the JWT.
   Future<Map<String, dynamic>> sendMessage({
     required String conversationId,
     required String clientMessageId,
     required String text,
     required String senderId,
   }) async {
+    // senderId remains in the method signature for compatibility with
+    // existing UI code; the server does not trust a client-supplied sender ID.
+    final normalizedText = text.trim();
+
+    if (conversationId.trim().isEmpty) {
+      throw Exception('Conversation ID is required.');
+    }
+
+    if (clientMessageId.trim().isEmpty) {
+      throw Exception('Client message ID is required.');
+    }
+
+    if (normalizedText.isEmpty) {
+      throw Exception('Message text cannot be empty.');
+    }
+
     final response = await http
         .post(
           Uri.parse('$baseUrl/messages'),
           headers: await _authHeaders(jsonContent: true),
           body: jsonEncode({
-            'conversationId': conversationId,
-            'clientMessageId': clientMessageId,
-            'text': text,
+            'conversationId': conversationId.trim(),
+            'clientMessageId': clientMessageId.trim(),
+            'text': normalizedText,
           }),
         )
         .timeout(const Duration(seconds: 10));
@@ -160,6 +234,11 @@ class ApiService {
     }
 
     final data = jsonDecode(response.body) as Map<String, dynamic>;
+
+    if (data['message'] is! Map) {
+      throw Exception('Invalid message response from server.');
+    }
+
     return Map<String, dynamic>.from(data['message'] as Map);
   }
 
@@ -172,7 +251,7 @@ class ApiService {
         return error['message'] as String;
       }
     } catch (_) {
-      // Fall back to a status-based error.
+      // Use a status-based fallback for a non-JSON response.
     }
 
     return '$fallback (${response.statusCode})';

@@ -21,6 +21,17 @@ app.use(
 );
 
 app.use(express.json({ limit: "1mb" }));
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+
+  res.on("finish", () => {
+    console.log(
+      `[API] ${req.method} ${req.originalUrl} -> ${res.statusCode} (${Date.now() - startedAt}ms)`
+    );
+  });
+
+  next();
+});
 app.get("/api/v1/health", (_req, res) => {
   res.status(200).json({
     status: "ok",
@@ -197,6 +208,99 @@ function serializeMessage(message) {
     createdAt: message.createdAt.toISOString(),
   };
 }
+
+/**
+ * Create or retrieve a one-to-one conversation.
+ * Requires the authenticated user's Bearer token.
+ */
+app.post("/api/v1/conversations", requireAuth, async (req, res) => {
+  const email =
+    typeof req.body?.email === "string"
+      ? req.body.email.trim().toLowerCase()
+      : "";
+
+  if (
+    !email ||
+    email.length > 254 ||
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+  ) {
+    return res.status(400).json({
+      error: {
+        code: "INVALID_EMAIL",
+        message: "A valid registered user's email is required.",
+      },
+    });
+  }
+
+  try {
+    const otherUser = await User.findOne({ email }).select("_id name email");
+
+    if (!otherUser) {
+      return res.status(404).json({
+        error: {
+          code: "USER_NOT_FOUND",
+          message: "No registered user exists with this email.",
+        },
+      });
+    }
+
+    const currentUserId = req.auth.userId;
+    const otherUserId = otherUser._id.toString();
+
+    if (currentUserId === otherUserId) {
+      return res.status(400).json({
+        error: {
+          code: "SELF_CONVERSATION_NOT_ALLOWED",
+          message: "You cannot create a conversation with yourself.",
+        },
+      });
+    }
+
+    // Stable ID shared by both participants, independent of display names.
+    const members = [currentUserId, otherUserId].sort();
+    const conversationId = `dm_${members.join("_")}`;
+
+    let conversation = await Conversation.findOne({ conversationId });
+
+    if (!conversation) {
+      try {
+        conversation = await Conversation.create({
+          conversationId,
+          members,
+        });
+      } catch (error) {
+        // Handle two simultaneous attempts to create the same conversation.
+        if (error.code !== 11000) throw error;
+        conversation = await Conversation.findOne({ conversationId });
+      }
+    }
+
+    if (!conversation) {
+      throw new Error("Conversation could not be created or retrieved.");
+    }
+
+    return res.status(200).json({
+      conversation: {
+        conversationId: conversation.conversationId,
+        members: conversation.members,
+      },
+      otherUser: {
+        id: otherUserId,
+        name: otherUser.name,
+        email: otherUser.email,
+      },
+    });
+  } catch (error) {
+    console.error("Conversation creation failed:", error.message);
+
+    return res.status(500).json({
+      error: {
+        code: "CONVERSATION_CREATE_FAILED",
+        message: "Unable to create or retrieve conversation.",
+      },
+    });
+  }
+});
 
 
  // Fetch messages for one conversation.
