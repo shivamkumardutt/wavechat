@@ -28,6 +28,12 @@ const messageSchema = new mongoose.Schema(
       trim: true,
       maxlength: 4000,
     },
+    replyToMessageId: {
+      type: String,
+      trim: true,
+      maxlength: 100,
+      default: null,
+    },
   },
   {
     timestamps: { createdAt: true, updatedAt: false },

@@ -1,4 +1,4 @@
-﻿import { requireAuth } from "./middleware/auth.js";
+import { requireAuth } from "./middleware/auth.js";
 import jwt from "jsonwebtoken";
 import express from "express";
 import helmet from "helmet";
@@ -198,13 +198,21 @@ app.post("/api/v1/auth/login", async (req, res) => {
 });
 
 
-function serializeMessage(message) {
+function serializeMessage(message, replyToMessage = null) {
   return {
     id: message._id.toString(),
     clientMessageId: message.clientMessageId,
     conversationId: message.conversationId,
     senderId: message.senderId,
     text: message.text,
+    replyToMessageId: message.replyToMessageId ?? null,
+    replyTo: replyToMessage
+      ? {
+          id: replyToMessage._id.toString(),
+          senderId: replyToMessage.senderId,
+          text: replyToMessage.text,
+        }
+      : null,
     createdAt: message.createdAt.toISOString(),
   };
 }
@@ -302,6 +310,106 @@ app.post("/api/v1/conversations", requireAuth, async (req, res) => {
   }
 });
 
+/**
+ * List conversations belonging to the authenticated user.
+ * Includes the other participant and the latest message preview.
+ */
+app.get("/api/v1/conversations", requireAuth, async (req, res) => {
+  try {
+    const currentUserId = req.auth.userId;
+
+    const conversations = await Conversation.find({
+      members: currentUserId,
+    }).lean();
+
+    if (conversations.length === 0) {
+      return res.status(200).json({ conversations: [] });
+    }
+
+    const conversationIds = conversations.map(
+      (conversation) => conversation.conversationId,
+    );
+
+    const otherUserIds = [
+      ...new Set(
+        conversations.flatMap((conversation) =>
+          conversation.members.filter(
+            (memberId) => memberId !== currentUserId,
+          ),
+        ),
+      ),
+    ];
+
+    const [users, messages] = await Promise.all([
+      User.find({ _id: { $in: otherUserIds } })
+        .select("_id name email")
+        .lean(),
+
+      Message.find({ conversationId: { $in: conversationIds } })
+        .sort({ createdAt: -1 })
+        .lean(),
+    ]);
+
+    const usersById = new Map(
+      users.map((user) => [
+        user._id.toString(),
+        {
+          id: user._id.toString(),
+          name: user.name,
+          email: user.email,
+        },
+      ]),
+    );
+
+    const latestMessageByConversation = new Map();
+
+    for (const message of messages) {
+      if (!latestMessageByConversation.has(message.conversationId)) {
+        latestMessageByConversation.set(message.conversationId, {
+          id: message._id.toString(),
+          text: message.text,
+          senderId: message.senderId,
+          createdAt: message.createdAt.toISOString(),
+        });
+      }
+    }
+
+    const result = conversations
+      .map((conversation) => {
+        const otherUserId = conversation.members.find(
+          (memberId) => memberId !== currentUserId,
+        );
+
+        return {
+          conversationId: conversation.conversationId,
+          otherUser: usersById.get(otherUserId) ?? null,
+          lastMessage:
+            latestMessageByConversation.get(
+              conversation.conversationId,
+            ) ?? null,
+          updatedAt: conversation.updatedAt?.toISOString() ?? null,
+        };
+      })
+      .sort((a, b) => {
+        const timeA = a.lastMessage?.createdAt ?? a.updatedAt ?? "";
+        const timeB = b.lastMessage?.createdAt ?? b.updatedAt ?? "";
+        return timeB.localeCompare(timeA);
+      });
+
+    return res.status(200).json({ conversations: result });
+  } catch (error) {
+    console.error("Failed to fetch conversations:", error.message);
+
+    return res.status(500).json({
+      error: {
+        code: "CONVERSATION_LIST_FAILED",
+        message: "Unable to fetch conversations.",
+      },
+    });
+  }
+});
+
+
 
  // Fetch messages for one conversation.
 app.get("/api/v1/messages", requireAuth, async (req, res) => {
@@ -334,20 +442,53 @@ app.get("/api/v1/messages", requireAuth, async (req, res) => {
       });
     }
 
-    const messages = await Message.find({ conversationId })
+        const messages = await Message.find({ conversationId })
       .sort({ createdAt: 1 })
       .limit(100)
       .lean();
 
+    const replyIds = [
+      ...new Set(
+        messages
+          .map((message) => message.replyToMessageId)
+          .filter(Boolean),
+      ),
+    ];
+
+    const replyTargets = replyIds.length
+      ? await Message.find({
+          _id: { $in: replyIds },
+          conversationId,
+        }).lean()
+      : [];
+
+    const replyTargetMap = new Map(
+      replyTargets.map((message) => [message._id.toString(), message]),
+    );
+
     return res.status(200).json({
-      messages: messages.map((message) => ({
-        id: message._id.toString(),
-        clientMessageId: message.clientMessageId ?? null,
-        conversationId: message.conversationId,
-        senderId: message.senderId,
-        text: message.text,
-        createdAt: message.createdAt.toISOString(),
-      })),
+      messages: messages.map((message) => {
+        const replyTarget = message.replyToMessageId
+          ? replyTargetMap.get(message.replyToMessageId)
+          : null;
+
+        return {
+          id: message._id.toString(),
+          clientMessageId: message.clientMessageId ?? null,
+          conversationId: message.conversationId,
+          senderId: message.senderId,
+          text: message.text,
+          replyToMessageId: message.replyToMessageId ?? null,
+          replyTo: replyTarget
+            ? {
+                id: replyTarget._id.toString(),
+                senderId: replyTarget.senderId,
+                text: replyTarget.text,
+              }
+            : null,
+          createdAt: message.createdAt.toISOString(),
+        };
+      }),
     });
   } catch (error) {
     console.error("Failed to fetch messages:", error.message);
@@ -376,6 +517,11 @@ app.post("/api/v1/messages", requireAuth, async (req, res) => {
 
   const text =
     typeof req.body?.text === "string" ? req.body.text.trim() : "";
+
+      const replyToMessageId =
+      typeof req.body?.replyToMessageId === "string"
+        ? req.body.replyToMessageId.trim()
+        : null;
 
   const senderId = req.auth.userId;
 
@@ -433,6 +579,41 @@ if (!conversation) {
     },
   });
 }
+          let replyToMessage = null;
+
+      if (replyToMessageId) {
+        if (replyToMessageId.length > 100) {
+          return res.status(400).json({
+            error: {
+              code: "INVALID_REPLY_TARGET",
+              message: "Invalid replyToMessageId.",
+            },
+          });
+        }
+
+        if (!mongoose.isValidObjectId(replyToMessageId)) {
+          return res.status(400).json({
+            error: {
+              code: "INVALID_REPLY_TARGET",
+              message: "Invalid reply target ID.",
+            },
+          });
+        }
+
+        replyToMessage = await Message.findOne({
+          _id: replyToMessageId,
+          conversationId,
+        }).lean();
+
+        if (!replyToMessage) {
+          return res.status(400).json({
+            error: {
+              code: "INVALID_REPLY_TARGET",
+              message: "Reply target was not found in this conversation.",
+            },
+          });
+        }
+      }
     const existing = await Message.findOne({
       conversationId,
       senderId,
@@ -440,7 +621,11 @@ if (!conversation) {
     });
 
     if (existing) {
-      if (existing.text !== text) {
+      if (
+  existing.text !== text ||
+  (existing.replyToMessageId ?? null) !==
+    (replyToMessage ? replyToMessage._id.toString() : null)
+) {
         return res.status(409).json({
           error: {
             code: "IDEMPOTENCY_CONFLICT",
@@ -457,16 +642,25 @@ if (!conversation) {
     }
 
     const message = await Message.create({
-      clientMessageId,
-      conversationId,
-      senderId,
-      text,
-    });
+  clientMessageId,
+  conversationId,
+  senderId,
+  text,
+  replyToMessageId: replyToMessage ? replyToMessage._id.toString() : null,
+});
 
-    return res.status(201).json({
-      message: serializeMessage(message),
-      deduplicated: false,
-    });
+const serializedMessage = serializeMessage(message, replyToMessage);
+
+// Broadcast only after the database save succeeds.
+req.app
+  .get("io")
+  ?.to(`conversation:${conversationId}`)
+  .emit("message:new", serializedMessage);
+
+return res.status(201).json({
+  message: serializedMessage,
+  deduplicated: false,
+});
   } catch (error) {
     // If concurrent requests race, a unique database index should
     // allow one insert. Re-read the winner when the index exists.
@@ -479,7 +673,7 @@ if (!conversation) {
 
       if (existing && existing.text === text) {
         return res.status(200).json({
-          message: serializeMessage(existing),
+          message: serializeMessage(existing, replyToMessage),
           deduplicated: true,
         });
       }

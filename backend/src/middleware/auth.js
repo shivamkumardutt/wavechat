@@ -45,7 +45,8 @@ export function requireAuth(req, res, next) {
 
     req.auth = { userId: payload.sub };
     return next();
-  } catch {
+    } catch (error) {
+    console.error("[AUTH] JWT verification failed:", error.name);
     return res.status(401).json({
       error: {
         code: "INVALID_TOKEN",

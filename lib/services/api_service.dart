@@ -1,4 +1,3 @@
-
 import 'dart:convert';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -69,13 +68,8 @@ class ApiService {
     final userId = user['id'] as String?;
     final userName = user['name'] as String?;
 
-    if (token == null ||
-        token.isEmpty ||
-        userId == null ||
-        userId.isEmpty) {
-      throw Exception(
-        'Login response is missing token or user information.',
-      );
+    if (token == null || token.isEmpty || userId == null || userId.isEmpty) {
+      throw Exception('Login response is missing token or user information.');
     }
 
     await _storage.write(key: _tokenKey, value: token);
@@ -92,14 +86,44 @@ class ApiService {
     return _storage.read(key: _userIdKey);
   }
 
+  Future<String?> getAuthToken() {
+    return _storage.read(key: _tokenKey);
+  }
+
   Future<String?> getCurrentUserName() {
     return _storage.read(key: _userNameKey);
   }
 
   Future<bool> isLoggedIn() async {
-    final token = await _storage.read(key: _tokenKey);
-    return token != null && token.isNotEmpty;
+  final token = await _storage.read(key: _tokenKey);
+
+  if (token == null || token.isEmpty) {
+    return false;
   }
+
+  try {
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl/conversations'),
+          headers: {
+            'Authorization': 'Bearer $token',
+          },
+        )
+        .timeout(const Duration(seconds: 10));
+
+    if (response.statusCode == 401) {
+      await logout();
+      return false;
+    }
+
+    // Keep the session if the server is temporarily unavailable.
+    return response.statusCode != 403 &&
+        response.statusCode < 500;
+  } catch (_) {
+    // A network failure alone should not erase a valid session.
+    return true;
+  }
+}
 
   // Create or retrieve a conversation with a registered user by email.
   // The backend must implement POST /api/v1/conversations.
@@ -121,9 +145,7 @@ class ApiService {
         .timeout(const Duration(seconds: 10));
 
     if (response.statusCode != 200) {
-      throw Exception(
-        _errorMessage(response, 'Failed to create conversation'),
-      );
+      throw Exception(_errorMessage(response, 'Failed to create conversation'));
     }
 
     final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -133,8 +155,7 @@ class ApiService {
     }
 
     return {
-      'conversation':
-          Map<String, dynamic>.from(data['conversation'] as Map),
+      'conversation': Map<String, dynamic>.from(data['conversation'] as Map),
       'otherUser': Map<String, dynamic>.from(data['otherUser'] as Map),
     };
   }
@@ -145,9 +166,7 @@ class ApiService {
     await _storage.delete(key: _userNameKey);
   }
 
-  Future<Map<String, String>> _authHeaders({
-    bool jsonContent = false,
-  }) async {
+  Future<Map<String, String>> _authHeaders({bool jsonContent = false}) async {
     final token = await _storage.read(key: _tokenKey);
 
     if (token == null || token.isEmpty) {
@@ -160,6 +179,39 @@ class ApiService {
     };
   }
 
+  // Fetch conversations belonging to the authenticated user.
+  Future<List<Map<String, dynamic>>> fetchConversations() async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/conversations'),
+      headers: await _authHeaders(),
+    );
+
+    final Map<String, dynamic> body;
+    try {
+      body = jsonDecode(response.body) as Map<String, dynamic>;
+    } catch (_) {
+      throw Exception('Invalid response from server (${response.statusCode}).');
+    }
+
+    if (response.statusCode != 200) {
+      final error = body['error'];
+      final message = error is Map ? error['message']?.toString() : null;
+
+      throw Exception(message ?? 'Could not load conversations.');
+    }
+
+    final rawConversations = body['conversations'];
+
+    if (rawConversations is! List) {
+      throw Exception('Server returned an invalid conversation list.');
+    }
+
+    return rawConversations
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList();
+  }
+
   // Fetch messages for an authorized conversation.
   Future<List<Map<String, dynamic>>> fetchMessages({
     required String conversationId,
@@ -170,9 +222,8 @@ class ApiService {
       throw Exception('Conversation ID is required.');
     }
 
-    final uri = Uri.parse('$baseUrl/messages').replace(
-      queryParameters: {'conversationId': normalizedId},
-    );
+    final uri = Uri.parse('$baseUrl/messages')
+        .replace(queryParameters: {'conversationId': normalizedId});
 
     final response = await http
         .get(uri, headers: await _authHeaders())
@@ -189,9 +240,7 @@ class ApiService {
       throw Exception('Invalid messages response from server.');
     }
 
-    return items
-        .map((item) => Map<String, dynamic>.from(item as Map))
-        .toList();
+    return items.map((item) => Map<String, dynamic>.from(item as Map)).toList();
   }
 
   // Send a message. The backend derives senderId from the JWT.
@@ -200,6 +249,7 @@ class ApiService {
     required String clientMessageId,
     required String text,
     required String senderId,
+    String? replyToMessageId,
   }) async {
     // senderId remains in the method signature for compatibility with
     // existing UI code; the server does not trust a client-supplied sender ID.
@@ -225,6 +275,7 @@ class ApiService {
             'conversationId': conversationId.trim(),
             'clientMessageId': clientMessageId.trim(),
             'text': normalizedText,
+              'replyToMessageId': replyToMessageId,
           }),
         )
         .timeout(const Duration(seconds: 10));
