@@ -95,35 +95,32 @@ class ApiService {
   }
 
   Future<bool> isLoggedIn() async {
-  final token = await _storage.read(key: _tokenKey);
+    final token = await _storage.read(key: _tokenKey);
 
-  if (token == null || token.isEmpty) {
-    return false;
-  }
-
-  try {
-    final response = await http
-        .get(
-          Uri.parse('$baseUrl/conversations'),
-          headers: {
-            'Authorization': 'Bearer $token',
-          },
-        )
-        .timeout(const Duration(seconds: 10));
-
-    if (response.statusCode == 401) {
-      await logout();
+    if (token == null || token.isEmpty) {
       return false;
     }
 
-    // Keep the session if the server is temporarily unavailable.
-    return response.statusCode != 403 &&
-        response.statusCode < 500;
-  } catch (_) {
-    // A network failure alone should not erase a valid session.
-    return true;
+    try {
+      final response = await http
+          .get(
+            Uri.parse('$baseUrl/conversations'),
+            headers: {'Authorization': 'Bearer $token'},
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 401) {
+        await logout();
+        return false;
+      }
+
+      // Keep the session if the server is temporarily unavailable.
+      return response.statusCode != 403 && response.statusCode < 500;
+    } catch (_) {
+      // A network failure alone should not erase a valid session.
+      return true;
+    }
   }
-}
 
   // Create or retrieve a conversation with a registered user by email.
   // The backend must implement POST /api/v1/conversations.
@@ -275,7 +272,7 @@ class ApiService {
             'conversationId': conversationId.trim(),
             'clientMessageId': clientMessageId.trim(),
             'text': normalizedText,
-              'replyToMessageId': replyToMessageId,
+            'replyToMessageId': replyToMessageId,
           }),
         )
         .timeout(const Duration(seconds: 10));

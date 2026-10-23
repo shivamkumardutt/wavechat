@@ -1,5 +1,5 @@
-
 import 'package:flutter/material.dart';
+
 import '../services/api_service.dart';
 
 class AuthScreen extends StatefulWidget {
@@ -139,9 +139,8 @@ class _AuthScreenState extends State<AuthScreen> {
                       ),
                       validator: (value) {
                         final email = value?.trim() ?? '';
-                        if (!RegExp(
-                          r'^[^@\s]+@[^@\s]+\.[^@\s]+$',
-                        ).hasMatch(email)) {
+                        if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+                            .hasMatch(email)) {
                           return 'Enter a valid email';
                         }
                         return null;
@@ -177,10 +176,7 @@ class _AuthScreenState extends State<AuthScreen> {
 
                     if (_error != null) ...[
                       const SizedBox(height: 16),
-                      Text(
-                        _error!,
-                        style: const TextStyle(color: Colors.red),
-                      ),
+                      Text(_error!, style: const TextStyle(color: Colors.red)),
                     ],
 
                     const SizedBox(height: 24),
@@ -206,9 +202,9 @@ class _AuthScreenState extends State<AuthScreen> {
                       onPressed: _loading
                           ? null
                           : () => setState(() {
-                                _isLogin = !_isLogin;
-                                _error = null;
-                              }),
+                              _isLogin = !_isLogin;
+                              _error = null;
+                            }),
                       child: Text(
                         _isLogin
                             ? "New here? Create an account"

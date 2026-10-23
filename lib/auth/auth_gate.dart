@@ -1,5 +1,5 @@
-
 import 'package:flutter/material.dart';
+
 import '../main.dart';
 import '../services/api_service.dart';
 import 'auth_screen.dart';
@@ -53,9 +53,7 @@ class _AuthGateState extends State<AuthGate> {
   @override
   Widget build(BuildContext context) {
     if (_checking) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     if (!_authenticated) {
